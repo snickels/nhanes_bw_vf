@@ -1,0 +1,2654 @@
+---
+title: 'NHANES: Birth weight, visual acuity, refraction, keratometry'
+author: "Stefan Nickels"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+  html_notebook:
+    number_sections: yes
+    toc: yes
+  html_document:
+    toc: yes
+---
+
+# Preparation
+
+```{r setup, error=TRUE, echo=TRUE, warnings=TRUE, message=TRUE}
+
+data.raw <- file.path("data", "raw")
+
+library(nhanesA) # package to retrieve NHANES data
+library(ggplot2) # advanced graphics
+library(survey)  # http://r-survey.r-forge.r-project.org/survey/index.html
+# library(xtable)  # 
+library(knitr)
+library(tableone) #
+
+R.Version()
+Sys.time()
+
+citation("nhanesA")
+citation("survey")
+citation("ggplot2")
+citation("tableone")
+citation("knitr")
+
+```
+
+
+```{r turn off lights, error=TRUE}
+knitr::opts_chunk$set(echo=FALSE, warnings=FALSE, message=FALSE, fig.path='figs/') # suppress source code, save figures in folder
+```
+
+
+"Your closest collaborator is you six months ago, but you don't reply to emails."
+https://github.com/kbroman/datasciquotes
+
+
+
+
+# NHANES data
+
+The National Health and Nutrition Examination Survey (NHANES) is a survey research program conducted by the National Center for Health Statistics (NCHS) to assess the health and nutritional status of adults and children in the United States: 
+https://www.cdc.gov/nchs/nhanes/index.htm
+https://en.wikipedia.org/wiki/National_Health_and_Nutrition_Examination_Survey
+
+Public use data files are available: 
+
+https://www.cdc.gov/nchs/data/nhanes/nhanes_release_policy.pdf
+https://wwwn.cdc.gov/nchs/nhanes/
+
+
+
+## VIX (Vision examination) 
+
+12+ years
+
+
+https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/VIX.htm
+```{r VIX, error=TRUE}
+nhanesSearchTableNames('VIX', includerdc=TRUE, details=TRUE)
+
+```
+
+* SEQN - Respondent sequence number
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+* VIXORAM - OR right axis, average
+* VIXOLAM - OR left axis, average
+* VIDRVA - Right visual acuity, presenting
+* VIDLVA - Left visual acuity, presenting 
+* VIDORFM - OR right confidence level reading
+* VIDOLFM - OR left confidence level reading
+* VIQ220 - Glasses/contact lenses worn for distance
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKRCD - Right keratometry cylinder 
+* VIXKRCG - Right keratometry axis (deg)
+* VIXKLDM - Left keratometry power, average (D) 
+* VIXKLCD - Left keratometry cylinder 
+* VIXKLCG - Left keratometry axis (deg)
+
+ 
+ 
+## ECQ: Early Childhood Questionnaire
+https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/ECQ.htm
+
+up to age 15
+
+```{r ECQ, error=TRUE}
+nhanesSearchTableNames('ECQ', includerdc=TRUE, details=TRUE)
+
+
+```
+
+* SEQN - Respondent sequence number
+* ECD070A - Weight at birth, pounds
+* ECD070B - Weight at birth, ounces
+* ECQ080 - Weight more/less than 5.5 lbs (2500 g)
+* ECQ090 - Weight more/less than 9.0 lbs (4100 g)
+* WTMEC2YR - Full Sample 2 Year MEC Exam Weight
+* WTINT4YR - Full Sample 4 Year Interview Weight
+
+## DEMO: Demographics Data
+https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/DEMO.htm
+
+included in every survey 
+
+* SEQN - Respondent sequence number
+* RIAGENDR - Gender: 1	Male	2	Female
+* RIDAGEEX - Exam Age in Months: when analyzing anthropometric data on children and youths from birth through age 19, RIDAGEEX would be used
+* RIDRETH1 - Race/Ethnicity, self.identification, 
+1	Mexican American
+2	Other Hispanic
+3	Non-Hispanic White
+4	Non-Hispanic Black	
+5	Other Race - Including Multi-Racial
+* stratum (SDMVSTRA) - for variance estimation
+* PSU (SDMVPSU) - for variance estimation
+
+
+
+# Load data
+
+## Load functions
+
+```{r load NHANES functions, error=TRUE}
+
+LoadNHANES <- function(year) {
+  # Load NHANES data
+  #
+  # Args:
+  #   year: A, B, C, D, E 
+  #
+  # Returns: 
+  #    data.frame with NHANES data 
+  
+  # survey cycle 1999 data files are lacking a suffix
+  if (year=="A") {
+    ecq.name <- "ECQ"
+    demo.name <- "DEMO"
+    vix.name <- "VIX"
+  } else {
+    ecq.name <- paste0("ECQ_", year)
+    demo.name <- paste0("DEMO_", year)
+    vix.name <- paste0("VIX_", year)
+  }
+  
+  demo <- nhanes(demo.name)
+  ecq <- nhanes(ecq.name)
+  vix <- nhanes(vix.name)
+  
+  # DEMO: add NA sample weight columns to avoid poblems with rbind later on
+  # (different sample weight variables available depending on survey cycle)
+  if (year %in% c("A","B")) {
+    demo$WTMEC2YR <- NA
+  } else {
+    demo$WTMEC4YR <- NA
+  }
+  keep <- c("SEQN", 
+            "RIAGENDR", 
+            "RIDAGEEX",
+            "RIDRETH1", "INDFMPIR",
+            "SDMVSTRA", "SDMVPSU", 
+            "WTMEC2YR", "WTMEC4YR")
+  demo <- demo[keep]
+  rm(keep)
+  
+  # ECQ
+  keep <- c("SEQN", 
+            "ECD070A", "ECD070B",
+            "ECQ080", "ECQ090")
+  ecq <- ecq[keep]
+  rm(keep)
+  
+  # VIX
+  keep <- c("SEQN", 
+            "VIXORSM", "VIXOLSM",
+            "VIXORCM", "VIXOLCM",
+            "VIXORAM", "VIXOLAM",
+            "VIDRVA", "VIDLVA",
+            "VIDORFM", "VIDOLFM",
+            "VIQ220", 
+            "VIXKRDM", "VIXKLDM",
+            "VIXKRCD", "VIXKLCD",
+            "VIXKRCG", "VIXKLCG")
+  vix <- vix[keep]
+  rm(keep)
+  
+  message(paste("year:", year, "vix:", nrow(vix), "demo:", nrow(demo), "ecq:", nrow(ecq)))
+  
+  nhanesdat <- merge(demo, vix, by = "SEQN", all = TRUE) 
+  nhanesdat <- merge(nhanesdat, ecq, by = "SEQN", all = TRUE) 
+  rm(demo, vix, ecq)
+
+  if (year=="A") nhanesdat$year <- "1999"
+  if (year=="B") nhanesdat$year <- "2001"
+  if (year=="C") nhanesdat$year <- "2003"
+  if (year=="D") nhanesdat$year <- "2005"
+  if (year=="E") nhanesdat$year <- "2007"
+  
+  return(nhanesdat)
+}
+```
+
+
+## Load 1999-2000
+
+```{r nhanesdat.a, error=TRUE}
+
+if (file.exists(file.path(data.raw, "nhanesdat.a.RData"))) { 
+  message("loading existing file")
+  load(file.path(data.raw, "nhanesdat.a.RData")) 
+} else {
+  message("retrieving data")
+  nhanesdat.a <- LoadNHANES("A")
+  save(nhanesdat.a, file = (file.path(data.raw, "nhanesdat.a.RData")))
+}
+
+```
+
+
+## Load 2001-2002	
+
+```{r ecq.b, error=TRUE}
+
+if (file.exists(file.path(data.raw, "nhanesdat.b.RData"))) { 
+  message("loading existing file")
+  load(file.path(data.raw, "nhanesdat.b.RData")) 
+} else {
+  message("retrieving data")
+  nhanesdat.b <- LoadNHANES("B")
+  save(nhanesdat.b, file = (file.path(data.raw, "nhanesdat.b.RData")))
+}
+
+```
+
+
+## Load 2003-2004
+
+```{r ecq.c, error=TRUE}
+
+if (file.exists(file.path(data.raw, "nhanesdat.c.RData"))) { 
+  message("loading existing file")
+  load(file.path(data.raw, "nhanesdat.c.RData")) 
+} else {
+  message("retrieving data")
+  nhanesdat.c <- LoadNHANES("C")
+  save(nhanesdat.c, file = (file.path(data.raw, "nhanesdat.c.RData")))
+}
+
+```
+
+
+## Load 2005-2006
+
+```{r ecq.d, error=TRUE}
+
+if (file.exists(file.path(data.raw, "nhanesdat.d.RData"))) { 
+  message("loading existing file")
+  load(file.path(data.raw, "nhanesdat.d.RData")) 
+} else {
+  message("retrieving data")
+  nhanesdat.d <- LoadNHANES("D")
+  save(nhanesdat.d, file = (file.path(data.raw, "nhanesdat.d.RData")))
+}
+
+```
+
+
+## Load 2007-2008
+
+```{r ecq.e, error=TRUE}
+
+if (file.exists(file.path(data.raw, "nhanesdat.e.RData"))) { 
+  message("loading existing file")
+  load(file.path(data.raw, "nhanesdat.e.RData")) 
+} else {
+  message("retrieving data")
+  nhanesdat.e <- LoadNHANES("E")
+  save(nhanesdat.e, file = (file.path(data.raw, "nhanesdat.e.RData")))
+}
+
+
+```
+
+
+
+
+# Prepare data
+
+## Recode functions
+
+
+### sample weight
+
+
+Johnson CL, Paulose-Ram R, Ogden CL, et al. National Health and Nutrition Examination Survey: Analytic guidelines, 1999–2010. National Center for Health Statistics. Vital Health Stat 2(161). 2013. ISBN 0–8406-0662–1
+
+Table E. Formulas for constructing weights: National Health and Nutrition Examination Survey, 1999–2010
+
+If sddsrvyr in (1,2), then MEC10YR = 2/5 * WTMEC4YR; /* for 1999–2002 */ 
+If sddsrvyr in (3,4,5), then MEC10YR = 1/5 * WTMEC2YR; /* for 2003–2008 */
+
+SDDSRVYR is the survey cycle variable: 1 = 1999–2000, 2 = 2001–2002, 3 = 2003–2004, 4 = 2005–2006, 5 = 2007–2008,
+
+
+```{r NHANES design functions, error=TRUE}
+
+CalculateNHANESweights <- function(data.NHANES) {
+  # Calculates weights for analyses according to NHANES Analysis Guidelines
+  #
+  # Args:
+  #   data.NHANES: NHANES data frame including year (start of two-year survey
+  #                cycle) and weighting variables WTMEC2YR and WTMEC4YR 
+  #
+  # Returns: 
+  #    data frame with additional weighting variable MEC10YR
+  data.NHANES$MEC10YR <- NA
+  
+  data.NHANES$MEC10YR[which (data.NHANES$year=="1999")] <- 2/5 * data.NHANES$WTMEC4YR[which (data.NHANES$year=="1999")]
+  data.NHANES$MEC10YR[(data.NHANES$year=="2001")] <- 2/5 * data.NHANES$WTMEC4YR[which (data.NHANES$year=="2001")]
+  data.NHANES$MEC10YR[(data.NHANES$year=="2003")] <- 1/5 * data.NHANES$WTMEC2YR[which (data.NHANES$year=="2003")]
+  data.NHANES$MEC10YR[(data.NHANES$year=="2005")] <- 1/5 * data.NHANES$WTMEC2YR[which (data.NHANES$year=="2005")]
+  data.NHANES$MEC10YR[(data.NHANES$year=="2007")] <- 1/5 * data.NHANES$WTMEC2YR[which (data.NHANES$year=="2007")]
+  
+  return(data.NHANES)
+  }
+
+```
+
+
+### demographics
+
+```{r demo functions, error=TRUE}
+
+RecodeEthnicity <- function(data.ethnicity) {
+  # Recodes Ethnicity
+  #
+  # Args:
+  #   data.ethnicity: NHANES variable RIDRETH1
+  #
+  # Returns: 
+  #    Ethnicity as factor
+
+  data.ethnicity <- factor(data.ethnicity, 
+                        levels = c(1, 2, 3, 4, 5),
+                        labels = c("MexAm", "othHis", "nonHisWhite", 
+                                   "nonHisBlack", "other"),
+                        ordered = FALSE)
+  
+  return(data.ethnicity)
+  }
+
+```
+
+
+
+
+### early childhood 
+```{r birth weight functions, error=TRUE}
+
+CleanBirthweight <- function(data.weight) {
+  # Recodes missing values for birth weight
+  #
+  # Args:
+  #   data.weight: NHANES ECD070A or ECD070B
+  #
+  # Returns: 
+  #    birth weight with missings recoded to NA
+
+  data.weight[data.weight==77] <- NA
+  data.weight[data.weight==99] <- NA
+  data.weight[data.weight==7777] <- NA
+  data.weight[data.weight==9999] <- NA
+
+  return(data.weight)
+  }
+
+
+
+RecodeBirthweight <- function(data.weight) {
+  # Recodes birth weight
+  #
+  # Args:
+  #   data.weight: NHANES dataframe, must include ECD070A and ECD070B
+  #
+  # Returns: 
+  #    birth weight in grams
+
+  # ECD070A - Weight at birth, pounds
+  bw.pound <- data.weight$ECD070A
+
+  
+  # ECD070B - Weight at birth, ounces
+  bw.ounces <- data.weight$ECD070B
+
+  bw.ounces[is.na(bw.ounces)] <- 0 # to avoid NA when summing up
+  
+  # 1 pound = 1 lb. av. = 16 ounces (oz. av.) = 0,453 592 37 Kilogramm
+  bw.ounces.sum <- bw.pound*16 + bw.ounces
+  bw.gram <- bw.ounces.sum/16 * 453.59237
+  
+  return(bw.gram)
+  }
+
+
+CategorizeBirthweight3 <- function(data.weight) {
+  # Categorizes birth weight
+  #
+  # Args:
+  #   data.weight: recoded NHANES variable birth weight in grams
+  #
+  # Returns: 
+  #    factor variable, categorized birth weight in grams in 3 categories
+  #     according to NHANES  
+
+  
+  bw.gram.cat <- data.weight
+  bw.gram.cat[bw.gram.cat < 2500] <- 2
+  bw.gram.cat[bw.gram.cat >= 2500 & bw.gram.cat <= 4100] <- 1
+  bw.gram.cat[bw.gram.cat > 4100] <- 3
+  bw.gram.cat <- factor(bw.gram.cat, 
+                        levels = c(1, 2, 3),
+                        labels = c("normal", "<2500", ">4100"))
+  return(bw.gram.cat)
+}
+
+
+
+CategorizeBirthweight4 <- function(data.weight) {
+  # Categorizes birth weight
+  #
+  # Args:
+  #   data.weight: recoded NHANES variable birth weight in grams
+  #
+  # Returns: 
+  #    factor variable, categorized birth weight in grams in 4 categories
+  #     according to NHANES  
+
+  
+  bw.gram.cat <- data.weight
+  bw.gram.cat[bw.gram.cat <1500] <- 2
+  bw.gram.cat[bw.gram.cat >= 1500 & bw.gram.cat < 2500] <- 3
+  bw.gram.cat[bw.gram.cat >= 2500 & bw.gram.cat <= 4100] <- 1
+  bw.gram.cat[bw.gram.cat > 4100] <- 4
+  bw.gram.cat <- factor(bw.gram.cat, 
+                        levels = c(1, 2, 3, 4),
+                        labels = c("normal", "<1500", "<2500", ">4100"))
+  return(bw.gram.cat)
+}
+
+
+
+```
+
+
+### vision exam
+
+```{r visual acuity functions, error=TRUE}
+RecodeVisualacuity <- function(data.va) {
+  # Recodes Visual Acuity to logMAR
+  #
+  # Args:
+  #   data.va: NHANES variable: VIDRVA, VIDLVA, VIDROVA, or VIDLOVA 
+  #
+  # Returns: 
+  #    Visual acuity in logMAR 
+
+  data.va[data.va==888] <- NA
+  data.va[data.va==20]  <- 0.0
+  data.va[data.va==25]  <- 0.1
+  data.va[data.va==30]  <- 0.2
+  data.va[data.va==40]  <- 0.3
+  data.va[data.va==50]  <- 0.4
+  data.va[data.va==60]  <- 0.5
+  data.va[data.va==80]  <- 0.6
+  data.va[data.va==200] <- 1
+  data.va[data.va==666] <- 1.1 
+  
+  return(data.va)
+}
+
+
+RecodeGlasses <- function(data.glasses) {
+  # Recodes distance glasses
+  #
+  # Args:
+  #   data.glasses: NHANES variable VIQ150 or VIQ220
+  #
+  # Returns: 
+  #    wearing glasses dichotomized
+
+  data.glasses[data.glasses==9]  <- NA
+  data.glasses[data.glasses==99] <- NA 
+  
+  data.glasses <- factor(data.glasses, 
+                        levels = c(1, 2),
+                        labels = c("Glasses", "noGlasses"),
+                        ordered = FALSE)
+  # Make noGlasses first, better for descriptives
+  data.glasses <- relevel(data.glasses, "noGlasses")
+
+  return(data.glasses)
+  }
+
+RecodeAxis <- function(data.axis) {
+  # Recodes Axis (degree)
+  #
+  # Args:
+  #   data.axis: NHANES variable VIXORAM, VIXOLAM, VIXKRG1, VIXKRG2,
+  #                              VIXKLG1, VIXKLG2
+  #
+  # Returns: 
+  #    wearing glasses dichotomized
+
+  data.axis[data.axis==888]  <- NA
+  data.axis[data.axis==777]  <- NA
+
+  return(data.axis)
+  }
+
+Recode88 <- function(data.88) {
+  # Recodes 88 ("could not obtain") to missing 
+  #
+  # Args:
+  #   data.88: NHANES variable 
+  #
+  # Returns: 
+  #    variable with 88 recoded to NA 
+
+  data.88[data.88==88]  <- NA
+ 
+  return(data.88)
+}
+
+
+deg2rad <- function(deg) {
+  # convert degree to rad  
+  #
+  # Args:
+  #   degree
+  #
+  # Returns: 
+  #    rad 
+  
+  rad <- (deg * pi / (180))
+  return (rad)
+}
+
+
+```
+
+
+
+### recode wrapper
+
+```{r recode all, error=TRUE}
+RecodeNHANESAll <- function(nhanesdata) {
+  # Recodes dataframe with NHANES data
+  #
+  # Args:
+  #    nhanesdata: NHANES dataframe
+  #
+  # Returns:
+  #    recoded dataframe
+  
+  
+  nhanesdata$ECD070.gram <- RecodeBirthweight(nhanesdata)
+  nhanesdata$ECD070.gram.100 <- nhanesdata$ECD070.gram / 100
+  nhanesdata$ECD070.gram.cat.3 <-
+  CategorizeBirthweight3(nhanesdata$ECD070.gram)
+  
+  nhanesdata$ECD070.gram.cat.4 <-
+  CategorizeBirthweight4(nhanesdata$ECD070.gram)
+  
+  # SER/SEL: Spherical Equivalent (spherical correction value plus half the cylindrical power)
+  
+  nhanesdata$SER <-
+  as.numeric(nhanesdata$VIXORSM + nhanesdata$VIXORCM / 2)
+  nhanesdata$SEL <-
+  as.numeric(nhanesdata$VIXOLSM + nhanesdata$VIXOLCM / 2)
+  
+  
+  ## power vectors (CAVE: R expects angles in radians, not degrees)
+  
+  # refractive astigmatism power vectors
+  nhanesdata$J0.ref.OD <-
+  (-nhanesdata$VIXORCM / 2) * cos (2 * deg2rad(nhanesdata$VIXORAM))
+  
+  nhanesdata$J45.ref.OD <-
+  (-nhanesdata$VIXORCM / 2) * sin (2 * deg2rad(nhanesdata$VIXORAM))
+  
+  nhanesdata$J0.ref.OS <-
+  (-nhanesdata$VIXOLCM / 2) * cos (2 * deg2rad(nhanesdata$VIXOLAM))
+  
+  nhanesdata$J45.ref.OS <-
+  (-nhanesdata$VIXOLCM / 2) * sin (2 * deg2rad(nhanesdata$VIXOLAM))
+  
+  
+  # keratometry astigmatism power vectors
+  nhanesdata$J0.kera.OD <-
+  (-nhanesdata$VIXKRCD / 2) * cos (2 * deg2rad(nhanesdata$VIXKRCG))
+  
+  nhanesdata$J45.kera.OD <-
+  (-nhanesdata$VIXKRCD / 2) * sin (2 * deg2rad(nhanesdata$VIXKRCG))
+  
+  nhanesdata$J0.kera.OS <-
+  (-nhanesdata$VIXKLCD / 2) * cos (2 * deg2rad(nhanesdata$VIXKLCG))
+  
+  nhanesdata$J45.kera.OS <-
+  (-nhanesdata$VIXKLCD / 2) * sin (2 * deg2rad(nhanesdata$VIXKLCG))
+  
+  # ocular-residual astigmatism power vectors
+  
+  nhanesdata$J0.resi.OD <-
+  nhanesdata$J0.ref.OD - nhanesdata$J0.kera.OD
+  
+  nhanesdata$J0.resi.OS <-
+  nhanesdata$J0.ref.OS - nhanesdata$J0.kera.OS
+  
+  nhanesdata$J45.resi.OD <-
+  nhanesdata$J45.ref.OD - nhanesdata$J45.kera.OD
+  
+  nhanesdata$J45.resi.OS <-
+  nhanesdata$J45.ref.OS - nhanesdata$J45.kera.OS
+  
+  return(nhanesdata)
+}
+```
+
+
+
+## combine data
+
+```{r combine data, error=TRUE}
+nhanesdat <- rbind(nhanesdat.a, nhanesdat.b, 
+                   nhanesdat.c, nhanesdat.d, 
+                   nhanesdat.e)
+```
+
+
+## clean data
+
+```{r clean NHANES, error=TRUE}
+
+# RIAGENDR - Gender: 1	Male	2	Female
+# sex
+nhanesdat$sex <- factor(nhanesdat$RIAGENDR, 
+                        levels = c("1", "2"),
+                        labels = c("male", "female"),
+                        ordered = FALSE)
+
+nhanesdat$year <- factor(nhanesdat$year, 
+                         levels = c("1999", "2001", "2003", "2005", "2007"),
+                         labels = c("1999", "2001", "2003", "2005", "2007"),
+                         ordered = FALSE)
+
+# RIDAGEEX - Exam Age in months 
+nhanesdat$age <- nhanesdat$RIDAGEEX/12
+
+# "RIDRETH1" 
+nhanesdat$RIDRETH1 <- RecodeEthnicity(nhanesdat$RIDRETH1)
+
+# Birth weight
+
+nhanesdat$ECD070A <- CleanBirthweight(nhanesdat$ECD070A)
+nhanesdat$ECD070B <- CleanBirthweight(nhanesdat$ECD070B)
+
+# VIQ220 - Glasses/contact lenses worn for distance
+nhanesdat$VIQ220 <- RecodeGlasses(nhanesdat$VIQ220)
+
+# VIDRVA - Right visual acuity, presenting
+nhanesdat$VIDRVA <- RecodeVisualacuity(nhanesdat$VIDRVA)
+
+# VIDLVA - Left visual acuity, presenting 
+nhanesdat$VIDLVA <- RecodeVisualacuity(nhanesdat$VIDLVA)
+
+# VIXORSM - OR right sphere, average
+nhanesdat$VIXORSM <- Recode88(nhanesdat$VIXORSM)
+
+# VIXORCM - OR right cylinder, average
+nhanesdat$VIXORCM <- Recode88(nhanesdat$VIXORCM)
+
+# VIXORAM - OR right axis, average
+nhanesdat$VIXORAM <- RecodeAxis(nhanesdat$VIXORAM)
+
+# VIXOLSM - OR left sphere, average
+nhanesdat$VIXOLSM <- Recode88(nhanesdat$VIXOLSM)
+
+# VIXOLCM - OR left cylinder, average
+nhanesdat$VIXOLCM <- Recode88(nhanesdat$VIXOLCM)
+
+# VIXOLAM - OR left axis, average
+nhanesdat$VIXOLAM <- RecodeAxis(nhanesdat$VIXOLAM)
+
+# VIXKRDM - Right keratometry power, average (D) 
+nhanesdat$VIXKRDM <- Recode88(nhanesdat$VIXKRDM)
+
+# VIXKRCD - Right keratometry cylinder  
+nhanesdat$VIXKRCD <- Recode88(nhanesdat$VIXKRCD)
+
+# VIXKRCG - Right keratometry axis (deg)
+nhanesdat$VIXKRCG <- RecodeAxis(nhanesdat$VIXKRCG)
+
+# VIXKLDM - Left keratometry power, average (D) 
+nhanesdat$VIXKLDM <- Recode88(nhanesdat$VIXKLDM)
+
+# VIXKLCD - Left keratometry cylinder  
+nhanesdat$VIXKLCD <- Recode88(nhanesdat$VIXKLCD)
+
+# VIXKLCG - Left keratometry axis (deg)
+nhanesdat$VIXKLCG <- RecodeAxis(nhanesdat$VIXKLCG)  
+
+
+summary(nhanesdat)
+table(nhanesdat$year, useNA = "ifany")
+
+```
+
+
+
+
+
+
+## restrict 
+
+```{r restrict data, error=TRUE}
+
+nrow(nhanesdat)
+
+# restrict to dataset with essential variables not missing 
+# (birth weight and at least one vision exam variable)
+
+nhanesdat <- nhanesdat[!is.na(nhanesdat$ECD070A) &
+                         (!is.na(nhanesdat$VIXORSM) |
+                            !is.na(nhanesdat$VIXOLSM) |
+                            !is.na(nhanesdat$VIXORCM) |
+                            !is.na(nhanesdat$VIXOLCM) |
+                            !is.na(nhanesdat$VIXORAM) |
+                            !is.na(nhanesdat$VIXOLAM) |
+                            !is.na(nhanesdat$VIDRVA) |
+                            !is.na(nhanesdat$VIDLVA) |
+                            !is.na(nhanesdat$VIQ220) |
+                            !is.na(nhanesdat$VIXKRDM) |
+                            !is.na(nhanesdat$VIXKLCD) |
+                            !is.na(nhanesdat$VIXKRDM) |
+                            !is.na(nhanesdat$VIXKLDM) |
+                            !is.na(nhanesdat$VIXKRCG) |
+                            !is.na(nhanesdat$VIXKLCG)), ]
+
+nrow(nhanesdat)
+
+
+message(paste("n VIXKRCD<0 (OD):", nrow(nhanesdat[which(nhanesdat$VIXKRCD<0), ])))
+message(paste("n VIXKLCD<0 (OS):", nrow(nhanesdat[which(nhanesdat$VIXKLCD<0), ])))
+
+nhanesdat$VIXKRCD[nhanesdat$VIXKRCD<0] <- NA
+nhanesdat$VIXKLCD[nhanesdat$VIXKLCD<0] <- NA
+
+
+message(paste("n VIXKRCD>10 (OD):", nrow(nhanesdat[which(nhanesdat$VIXKRCD>10), ])))
+message(paste("n VIXKLCD>10 (OS):", nrow(nhanesdat[which(nhanesdat$VIXKLCD>10), ])))
+
+nhanesdat$VIXKRCD[nhanesdat$VIXKRCD>10] <- NA
+nhanesdat$VIXKLCD[nhanesdat$VIXKLCD>10] <- NA
+
+
+
+```
+
+
+
+## recode data
+```{r recode NHANES, error=TRUE}
+nhanesdat <- RecodeNHANESAll(nhanesdat)
+
+nhanesdat <- CalculateNHANESweights(nhanesdat)
+
+summary(nhanesdat)
+table(nhanesdat$year, useNA = "ifany")
+
+```
+
+
+
+
+
+
+## survey design object
+
+* stratum (SDMVSTRA) - for variance estimation
+* PSU (SDMVPSU) - for variance estimation
+
+
+http://r-survey.r-forge.r-project.org/survey/example-twostage.html
+
+http://stats.idre.ucla.edu/r/faq/how-can-i-do-regression-estimation-with-survey-data/
+
+https://github.com/ajdamico/asdfree/blob/master/National%20Health%20and%20Nutrition%20Examination%20Survey/2009-2010%20interview%20plus%20laboratory%20-%20download%20and%20analyze.R
+
+
+
+```{r survey object, error=TRUE}
+
+# https://github.com/ajdamico/asdfree/
+
+nhanes.tsl.design <- 
+	svydesign(
+		id = ~SDMVPSU , 
+		strata = ~SDMVSTRA ,
+		nest = TRUE ,
+		weights = ~MEC10YR ,
+		data = nhanesdat
+	)
+
+```
+
+
+# Descriptives
+
+## Distributions
+
+### birth weight
+
+```{r birth weight distri, error=TRUE}
+
+summary(nhanesdat$ECD070.gram)
+sd(nhanesdat$ECD070.gram)
+```
+
+### age 
+
+```{r age distri, error=TRUE}
+summary(nhanesdat$age)
+
+```
+
+
+## Plots 
+
+
+### birth weight
+
+```{r desc bw, error=TRUE}
+
+summary(nhanesdat$ECD070.gram)
+
+table(nhanesdat$ECD070.gram.cat, useNA = "ifany")
+table(nhanesdat$ECD070.gram.cat.3, useNA = "ifany")
+
+ggplot(nhanesdat, aes(x=ECD070.gram)) +
+  geom_histogram(colour="black", fill="white") +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 1500) +
+  geom_vline(linetype="solid", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="solid", size=1, colour="red", xintercept = 4000) +
+  geom_vline(linetype="dashed", size=1, colour="blue", xintercept = 2500) +
+  geom_vline(linetype="dashed", size=1, colour="blue", xintercept = 4100) 
+
+ggplot(nhanesdat, aes(x=year, y=ECD070.gram)) + 
+  geom_boxplot() 
+
+```
+
+
+### age
+
+```{r desc age, error=TRUE}
+
+ggplot(nhanesdat, aes(x=year, y=age)) + 
+  geom_boxplot()
+
+```
+
+
+### visual acuity
+```{r desc va, error=TRUE}
+
+table(nhanesdat$VIDRVA, useNA = "ifany")
+table(nhanesdat$VIDLVA, useNA = "ifany")
+
+ggplot(nhanesdat, aes(x=VIDRVA)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=year, y=VIDRVA)) + 
+  geom_boxplot()
+
+
+ggplot(nhanesdat, aes(x=VIDLVA)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=year, y=VIDLVA)) +
+  geom_boxplot()
+
+```
+
+
+
+### ref: sph
+
+```{r desc ref se, error=TRUE}
+
+# * VIXORSM - OR right sphere, average
+ggplot(nhanesdat, aes(x=year, y=VIXORSM)) +
+  geom_boxplot()
+
+ggplot(nhanesdat, aes(x=year, y=VIXOLSM)) +
+  geom_boxplot()
+
+```
+
+
+### ref: cyl
+
+```{r desc ref cy, error=TRUE}
+
+ggplot(nhanesdat, aes(x=year, y=VIXORCM)) + 
+  geom_boxplot()
+
+ggplot(nhanesdat, aes(x=year, y=VIXOLCM)) +
+  geom_boxplot()
+
+```
+
+### ref: SE
+
+```{r desc ref SE, error=TRUE}
+
+ggplot(nhanesdat, aes(x=year, y=SER)) + 
+  geom_boxplot()
+
+ggplot(nhanesdat, aes(x=year, y=SEL)) +
+  geom_boxplot()
+
+```
+
+### ref: axis
+
+```{r desc ref axis, error=TRUE}
+
+ggplot(nhanesdat, aes(x=VIXORAM)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=VIXOLAM)) +
+  geom_histogram(colour="black", fill="white")
+
+```
+
+
+### ref: asti J0
+```{r desc ref j0, error=TRUE}
+
+ggplot(nhanesdat, aes(x=J0.ref.OD)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=J0.ref.OS)) +
+  geom_histogram(colour="black", fill="white")
+
+```
+
+### ref: asti J45
+```{r desc ref j45, error=TRUE}
+
+ggplot(nhanesdat, aes(x=J45.ref.OD)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=J45.ref.OS)) +
+  geom_histogram(colour="black", fill="white")
+
+```
+
+### kera: power
+
+```{r desc kera power, error=TRUE}
+
+# * VIXKRDM - Right keratometry power, average (D) 
+ggplot(nhanesdat, aes(x=year, y=VIXKRDM)) + 
+  geom_boxplot()
+
+# * VIXKLDM - Left keratometry power, average (D)
+ggplot(nhanesdat, aes(x=year, y=VIXKLDM)) +
+  geom_boxplot()
+```
+
+### kera: cylinder
+
+TODO: clarify outliers VIXKRCD
+
+```{r desc kera cyl, error=TRUE}
+
+# * VIXKRCD - Right keratometry cylinder  
+ggplot(nhanesdat, aes(x=year, y=VIXKRCD)) + 
+  geom_boxplot()
+
+# * VIXKLCD - Left keratometry cylinder
+ggplot(nhanesdat, aes(x=year, y=VIXKLCD)) +
+  geom_boxplot()
+
+```
+
+
+
+
+
+```{r clean kera axis, error=TRUE}
+
+# VIXKRCG - Right keratometry axis (deg)
+ggplot(nhanesdat, aes(x=year, y=VIXKRCG)) + 
+  geom_boxplot()
+
+# VIXKLCG - Left keratometry axis (deg)
+ggplot(nhanesdat, aes(x=year, y=VIXKLCG)) +
+  geom_boxplot()
+
+```
+
+
+### kera: axis
+
+```{r desc kera axis, error=TRUE}
+
+# * VIXKRCD - Right keratometry axis   
+ggplot(nhanesdat, aes(x=year, y=VIXKRCG)) + 
+  geom_boxplot()
+
+# * VIXKLCD - Left keratometry cylinder
+ggplot(nhanesdat, aes(x=year, y=VIXKLCG)) +
+  geom_boxplot()
+
+```
+
+
+
+### kera: asti J0
+```{r desc kera j0, error=TRUE}
+
+ggplot(nhanesdat, aes(x=J0.kera.OD)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=J0.kera.OS)) +
+  geom_histogram(colour="black", fill="white")
+
+```
+
+### kera: asti J45
+```{r desc kera j45, error=TRUE}
+
+ggplot(nhanesdat, aes(x=J45.kera.OD)) +
+  geom_histogram(colour="black", fill="white")
+
+ggplot(nhanesdat, aes(x=J45.kera.OS)) +
+  geom_histogram(colour="black", fill="white")
+
+```
+
+
+
+### distance glasses
+
+```{r desc glasses, error=TRUE}
+
+# TOOD barplot per year
+table(nhanesdat$VIQ220, useNA = "ifany")
+
+table(nhanesdat$VIQ220, nhanesdat$year, useNA = "ifany")
+
+```
+
+
+
+## Table 1 (Sample characteristics)
+
+```{r table 1, error=TRUE}
+
+nrow(nhanesdat)
+
+# Create a variable list 
+listVars <- c("sex", "age", "INDFMPIR", "RIDRETH1",
+              "VIXORSM", 
+              "VIXOLSM",
+              "VIXORCM",
+              "VIXOLCM",
+              "VIXORAM", 
+              "VIXOLAM",
+              "J0.ref.OD",
+              "J0.ref.OS",
+              "J45.ref.OD",
+              "J45.ref.OS",
+              "SER",
+              "SEL",
+              "VIDRVA", 
+              "VIDLVA",
+              "VIQ220",
+              "VIXKRDM",
+              "VIXKLDM",
+              "VIXKRCD",
+              "VIXKLCD",
+              "J0.kera.OD",
+              "J0.kera.OS",
+              "J45.kera.OD",
+              "J45.kera.OS")
+
+# Define categorical variables
+catVars <- c("sex","RIDRETH1", "VIQ220")
+
+# unweighted, split by birth weight groups
+table.1 <- CreateTableOne(vars = listVars, data = nhanesdat, factorVars = catVars, strata = "ECD070.gram.cat.3", test = FALSE)
+
+table.1
+
+
+table.1all <- CreateTableOne(vars = listVars, data = nhanesdat, factorVars = catVars, test = FALSE)
+
+table.1all
+
+```
+
+`
+
+
+
+# Analysis
+
+## Plots
+
+
+### Sphere
+
+```{r plot bw sphere, error=TRUE}
+
+plot.VIXORSM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXORSM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXORSM
+plot.VIXORSM + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXORSM)) +
+  geom_boxplot()
+
+```
+
+
+### Cylinder
+
+
+```{r plot bw cylinder, error=TRUE}
+
+plot.VIXORCM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXORCM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXORCM
+plot.VIXORCM + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXORCM)) +
+  geom_boxplot()
+
+
+```
+
+### SE
+
+```{r plot bw se, error=TRUE}
+
+plot.SER <- ggplot(nhanesdat, aes(x = ECD070.gram, y = SER)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.SER
+plot.SER + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = SER)) +
+  geom_boxplot()
+
+```
+
+
+### Axis
+
+```{r plot bw axis, error=TRUE}
+plot.VIXORAM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXORAM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXORAM
+plot.VIXORAM + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXORAM)) +
+  geom_boxplot()
+```
+
+
+### J0 ref
+
+```{r plot bw J0, error=TRUE}
+plot.J0.ref.OD <- ggplot(nhanesdat, aes(x = ECD070.gram, y = J0.ref.OD)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.J0.ref.OD
+plot.J0.ref.OD + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = J0.ref.OD)) +
+  geom_boxplot()
+```
+
+### J45 ref
+
+```{r plot bw J45, error=TRUE}
+plot.J45.ref.OD <- ggplot(nhanesdat, aes(x = ECD070.gram, y = J45.ref.OD)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.J45.ref.OD
+plot.J45.ref.OD + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = J45.ref.OD)) +
+  geom_boxplot()
+```
+
+
+### Kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+
+```{r plot bw kera power, error=TRUE}
+
+plot.VIXKRDM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXKRDM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dashed", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dashed", size=1, colour="red", xintercept = 4100) + 
+  labs(x="Birth weight [grams]") + labs(y="Corneal power [diopters]")
+
+plot.VIXKRDM + facet_grid(. ~ year)
+ggsave("fig1.tiff", dpi=300) # figure 1 for publication
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
+  geom_boxplot()
+
+plot.VIXKLDM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXKLDM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXKLDM
+plot.VIXKLDM + facet_grid(. ~ year)
+
+fig2 <- ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
+  geom_boxplot() + 
+  labs(x="Birth weight categories [grams]") + 
+  labs(y="Corneal power [diopters]")
+
+fig2 
+ggsave("fig2.tiff", dpi=300) # figure 2 for publication
+
+
+```
+
+### Kera cylinder
+
+
+* VIXKRCD - Right keratometry cylinder  
+* VIXKLCD - Left keratometry cylinder  
+
+
+```{r plot bw keracyl, error=TRUE}
+
+plot.VIXKRCD <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXKRCD)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXKRCD
+plot.VIXKRCD + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRCD)) +
+  geom_boxplot()
+
+```
+
+
+### Kera Axis
+
+```{r plot bw axis kera, error=TRUE}
+plot.VIXKRCG <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXKRCG)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIXKRCG
+plot.VIXKRCG + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRCG)) +
+  geom_boxplot()
+```
+
+
+
+### J0 kera
+
+```{r plot bw J0 kera, error=TRUE}
+plot.J0.kera.OD <- ggplot(nhanesdat, aes(x = ECD070.gram, y = J0.kera.OD)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.J0.kera.OD
+plot.J0.kera.OD + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = J0.kera.OD)) +
+  geom_boxplot()
+```
+
+### J45 kera
+
+```{r plot bw J45 kera, error=TRUE}
+plot.J45.kera.OD <- ggplot(nhanesdat, aes(x = ECD070.gram, y = J45.kera.OD)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.J45.kera.OD
+plot.J45.kera.OD + facet_grid(. ~ year)
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = J45.kera.OD)) +
+  geom_boxplot()
+```
+
+
+
+### Visual acuity
+
+```{r plot bw va, error = TRUE}
+
+#TODO
+
+plot.VIDRVA <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIDRVA)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm)  +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+
+plot.VIDRVA
+plot.VIDRVA + facet_grid(. ~ year)
+
+# ggplot(nhanesdat, aes(x=ECD070.gram.cat)) + geom_bar(stat = "count") 
+
+ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIDRVA)) +
+  geom_boxplot()
+
+```
+
+
+
+## Survey reg. cat.
+
+### Survey reg functions
+
+
+```{r survey functions, error=TRUE}
+
+ExtractSurveyRegression <- function(svyglm.object, analysis.mode) {
+  # Extracts details from surveyglm models  
+  #
+  # Args:
+  #   svyglm.object: result of surveyglm 
+  #   analysis.mode: cont/cat to use birth weight continuous or categorized
+  
+  # Returns: 
+  #    vector with results 
+  
+  
+  if (analysis.mode=="cont") { 
+  est   <- round(summary(svyglm.object)$coef[2,1], 2) # estimate
+  #sd    <- round(summary(svyglm.object)$coef[2,2], 2)# standard deviation
+  ci.lb <- round(confint(svyglm.object)[2,1], 2) # ci low
+  ci.ub <- round(confint(svyglm.object)[2,2], 2) # ci up
+  p     <- round(summary(svyglm.object)$coef[2,4], 2) # p 
+    
+  # as list
+  regression.details <- list(est, ci.lb, ci.ub, p)
+  
+  names(regression.details) <- c("est", "ci.l", "ci.u", "p")
+  return(as.data.frame(regression.details))
+  
+  }  
+  
+  if (analysis.mode=="cat") { 
+  est.lbw   <- round(summary(svyglm.object)$coef[2,1], 2) # estimate
+  #sd.lbw    <- round(summary(svyglm.object)$coef[2,2], 2)# standard deviation
+  ci.lb.lbw <- round(confint(svyglm.object)[2,1], 2) # ci low
+  ci.ub.lbw <- round(confint(svyglm.object)[2,2], 2) # ci up
+  p.lbw     <- round(summary(svyglm.object)$coef[2,4], 2) # p 
+  
+  est.hbw   <- round(summary(svyglm.object)$coef[3,1], 2) # estimate
+  #sd.hbw    <- round(summary(svyglm.object)$coef[3,2], 2)# standard deviation
+  ci.lb.hbw <- round(confint(svyglm.object)[3,1], 2) # ci low
+  ci.ub.hbw <- round(confint(svyglm.object)[3,2], 2) # ci up
+  p.hbw     <- round(summary(svyglm.object)$coef[3,4], 2) # p 
+  
+  # as list
+  regression.details <- list(est.lbw, ci.lb.lbw, ci.ub.lbw, p.lbw,
+                             est.hbw, ci.lb.hbw, ci.ub.hbw, p.hbw)
+  
+  names(regression.details) <- c("est.l", 
+                                 "ci.l.l", "ci.u.l", "p.l",
+                                 "est.h", 
+                                 "ci.l.h", "ci.u.h", "p.h")
+  
+  return(as.data.frame(regression.details))
+  
+  }
+  
+}
+
+```
+
+
+### Sphere
+
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+
+```{r surveyglm sphere, error=TRUE}
+
+model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+```
+
+
+### Cylinder
+
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+
+```{r surveyglm cyl, error=TRUE}
+# model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# summary(model.od)
+# summary(model.os)
+# 
+# ExtractSurveyRegression(model.od, "cat")
+# ExtractSurveyRegression(model.os, "cat")
+# 
+# rm(model.od, model.os)
+```
+
+
+### SE
+
+```{r surveyglm SE, error=TRUE}
+model.od <- svyglm(formula = SER ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = SEL ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+### VA
+
+* VIDRVA - Right visual acuity, presenting
+* VIDLVA - Left visual acuity, presenting 
+
+```{r surveyglm va, error=TRUE}
+model.od <- svyglm(formula = VIDRVA ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1 + VIQ220, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIDLVA ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1 + VIQ220, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### glasses
+
+```{r surveyglm glasses, error=TRUE}
+model.od <- svyglm(formula = VIQ220 ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design, 
+               family = quasibinomial(	(link = "logit")))
+
+summary(model.od)
+
+ExtractSurveyRegression(model.od, "cat")
+
+rm(model.od)
+
+```
+
+
+### kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+```{r surveyglm kera power, error=TRUE}
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+summary(svyglm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1 + sex*ECD070.gram.cat.3 + RIDRETH1*ECD070.gram.cat.3, design = nhanes.tsl.design))
+
+summary(svyglm(formula = VIXKLDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1+ sex*ECD070.gram.cat.3 + RIDRETH1*ECD070.gram.cat.3, design = nhanes.tsl.design))
+
+summary(glm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, data = nhanesdat, weights = MEC10YR))
+
+summary(glm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, data = nhanesdat))
+
+
+```
+
+
+### Kera Cyl
+
+* VIXKRCD 
+* VIXKLCD 
+
+```{r surveyglm kera cyl, error=TRUE}
+# model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# 
+# summary(model.od)
+# summary(model.os)
+# 
+# ExtractSurveyRegression(model.od, "cat")
+# ExtractSurveyRegression(model.os, "cat")
+# 
+# rm(model.od, model.os)
+
+```
+
+
+
+
+### J0 ref
+
+```{r surveyglm ref j0, error=TRUE}
+model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### J45 ref
+
+```{r surveyglm ref j45, error=TRUE}
+model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+### J0 kera
+
+```{r surveyglm kera j0, error=TRUE}
+model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### J45 kera
+
+```{r surveyglm kera j45, error=TRUE}
+model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+## Survey reg. cont.
+
+### sphere
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+
+```{r surveyglm cont sphere, error=TRUE}
+
+crude.model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+rm(crude.model.od, crude.model.os)
+
+
+model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+
+
+```
+
+
+### cylinder
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+
+```{r surveyglm cont cyl, error=TRUE}
+# model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# summary(model.od)
+# summary(model.os)
+# 
+# ExtractSurveyRegression(model.od, "cont")
+# ExtractSurveyRegression(model.os, "cont")
+# 
+# rm(model.od, model.os)
+
+
+```
+
+
+
+### SE
+
+```{r surveyglm cont SE, error=TRUE}
+
+crude.model.od <- svyglm(formula = SER ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = SEL ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+rm(crude.model.od, crude.model.os)
+
+
+model.od <- svyglm(formula = SER ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = SEL ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+### kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+```{r surveyglm cont kera power, error=TRUE}
+
+crude.model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+rm(crude.model.od, crude.model.os)
+
+
+
+
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+
+summary(svyglm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1 + sex*ECD070.gram.100 + RIDRETH1*ECD070.gram.100, design = nhanes.tsl.design))
+
+summary(svyglm(formula = VIXKLDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1 + sex*ECD070.gram.100 + RIDRETH1*ECD070.gram.100, design = nhanes.tsl.design))
+
+summary(glm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, data = nhanesdat, weights = MEC10YR))
+
+summary(glm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, data = nhanesdat))
+
+```
+
+
+
+
+### Kera Cyl
+
+* VIXKRCD 
+* VIXKLCD 
+
+```{r surveyglm cont kera cyl, error=TRUE}
+
+# crude.model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.100, design = nhanes.tsl.design)
+# crude.model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.100, design = nhanes.tsl.design)
+# 
+# summary(crude.model.od)
+# summary(crude.model.os)
+# 
+# ExtractSurveyRegression(crude.model.od, "cont")
+# ExtractSurveyRegression(crude.model.os, "cont")
+# 
+# rm(crude.model.od, crude.model.os)
+# 
+# 
+# model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+# 
+# 
+# summary(model.od)
+# summary(model.os)
+# 
+# ExtractSurveyRegression(model.od, "cont")
+# ExtractSurveyRegression(model.os, "cont")
+# 
+# rm(model.od, model.os)
+
+```
+
+
+
+
+
+### VA
+* VIDRVA - Right visual acuity, presenting
+* VIDLVA - Left visual acuity, presenting 
+
+```{r surveyglm cont va, error=TRUE}
+
+crude.model.od <- svyglm(formula = VIDRVA ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = VIDLVA ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+rm(crude.model.od, crude.model.os)
+
+model.od <- svyglm(formula = VIDRVA ~ ECD070.gram.100 + sex + age + year + RIDRETH1 + VIQ220, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIDLVA ~ ECD070.gram.100 + sex + age + year + RIDRETH1 + VIQ220, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+### glasses
+
+```{r surveyglm cont glasses, error=TRUE}
+model.ou <- svyglm(formula = VIQ220 ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design, family = quasibinomial(link = "logit"))
+
+
+summary(model.ou)
+
+ExtractSurveyRegression(model.ou, "cont")
+
+
+rm(model.ou)
+
+```
+
+
+### J0 ref
+
+```{r surveyglm cont ref j0, error=TRUE}
+
+crude.model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+
+
+model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+
+```
+
+### J45 ref
+
+```{r surveyglm cont ref j45, error=TRUE}
+
+crude.model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+
+model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
+### J0 kera
+
+```{r surveyglm cont kera j0, error=TRUE}
+
+crude.model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+
+
+model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+
+```
+
+### J45 kera
+
+```{r surveyglm cont kera j45, error=TRUE}
+
+crude.model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.100, design = nhanes.tsl.design)
+crude.model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.100, design = nhanes.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+ExtractSurveyRegression(crude.model.od, "cont")
+ExtractSurveyRegression(crude.model.os, "cont")
+
+
+model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
+
+
+
+# Sensi, restricted to myopic
+
+both eyes SE < -0.5
+
+```{r sensi dataset, error=TRUE}
+
+# both eyes <-0.5
+nhanesdat.sensi <- nhanesdat[which((nhanesdat$SER< -0.5) & 
+                                    (nhanesdat$SEL< -0.5)), ]
+
+nrow(nhanesdat.sensi)
+
+nhanes.tsl.design.sensi <- 
+	svydesign(
+		id = ~SDMVPSU , 
+		strata = ~SDMVSTRA ,
+		nest = TRUE ,
+		weights = ~MEC10YR ,
+		data = nhanesdat.sensi
+	)
+
+```
+
+
+
+## Survey reg. cat.
+
+### sphere
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+
+```{r surveyglm sensi sensi sphere, error=TRUE}
+model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+```
+
+
+### cylinder
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+
+```{r surveyglm sensi sensi cyl, error=TRUE}
+model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+```
+
+
+
+### SE
+
+```{r surveyglm sensi sensi SE, error=TRUE}
+model.od <- svyglm(formula = SER ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = SEL ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+### J0 ref
+
+```{r surveyglm sensi ref j0, error=TRUE}
+model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+```
+
+### J45 ref
+
+```{r surveyglm sensi ref j45, error=TRUE}
+model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+```
+
+
+
+### kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+```{r surveyglm sensi kera power, error=TRUE}
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+# summary(glm(formula = VIXKRDM ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, data = nhanesdat, weights = MEC10YR))
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+```
+
+
+
+
+
+### J0 kera
+
+```{r surveyglm sensi kera j0, error=TRUE}
+model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+```
+
+### J45 kera
+
+```{r surveyglm sensi kera j45, error=TRUE}
+model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.cat.3 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
+
+
+## Survey reg. cont.
+
+### sphere
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+
+```{r surveyglm sensi cont sphere, error=TRUE}
+model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+### cylinder
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+
+```{r surveyglm sensi cont cyl, error=TRUE}
+model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+```
+
+
+
+### SE
+
+```{r surveyglm sensi cont SE, error=TRUE}
+model.od <- svyglm(formula = SER ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = SEL ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
+### J0 ref
+
+```{r surveyglm sensi cont ref j0, error=TRUE}
+model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+
+```
+
+### J45 ref
+
+```{r surveyglm sensi cont ref j45, error=TRUE}
+model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+### kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+```{r surveyglm sensi cont kera power, error=TRUE}
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
+
+
+### J0 kera
+
+```{r surveyglm sensi cont kera j0, error=TRUE}
+model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+
+```
+
+### J45 kera
+
+```{r surveyglm sensi cont kera j45, error=TRUE}
+model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.tsl.design.sensi)
+
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cont")
+ExtractSurveyRegression(model.os, "cont")
+
+rm(model.od, model.os)
+```
+
+
+
+
+
+
+
+
+
+# Sensi: 4 categories BW
+
+## descriptives  birth weight
+
+```{r desc bw 4 cat, error=TRUE}
+
+summary(nhanesdat$ECD070.gram)
+
+table(nhanesdat$ECD070.gram.cat, useNA = "ifany")
+table(nhanesdat$ECD070.gram.cat.4, useNA = "ifany")
+
+ggplot(nhanesdat, aes(x=ECD070.gram)) +
+  geom_histogram(colour="black", fill="white") +
+  geom_vline(linetype="dashed", size=1, colour="red", xintercept = 1500) +
+  geom_vline(linetype="solid", size=1, colour="red", xintercept = 2500) +
+  geom_vline(linetype="solid", size=1, colour="red", xintercept = 4100) 
+
+ggplot(nhanesdat, aes(x=year, y=ECD070.gram)) + 
+  geom_boxplot() 
+
+```
+
+
+```{r desc bw 4 cat tab 1, error=TRUE}
+
+nrow(nhanesdat)
+
+#Create a variable list which we want in Table 1
+listVars <- c("sex", "age", "INDFMPIR", "RIDRETH1",
+              "VIXORSM", 
+              "VIXOLSM",
+              "VIXORCM",
+              "VIXOLCM",
+              "VIXORAM", 
+              "VIXOLAM",
+              "J0.ref.OD",
+              "J0.ref.OS",
+              "J45.ref.OD",
+              "J45.ref.OS",
+              "SER",
+              "SEL",
+              "VIDRVA", 
+              "VIDLVA",
+              "VIQ220",
+              "VIXKRDM",
+              "VIXKLDM",
+              "VIXKRCD",
+              "VIXKLCD",
+              "J0.kera.OD",
+              "J0.kera.OS",
+              "J45.kera.OD",
+              "J45.kera.OS")
+
+#Define categorical variables
+catVars <- c("sex","RIDRETH1", "VIQ220")
+
+# unweighted, split by birth weight groups
+table.s1a <- CreateTableOne(vars = listVars, data = nhanesdat, factorVars = catVars, strata = "ECD070.gram.cat.4", test = FALSE)
+
+table.s1a
+
+
+```
+
+## Survey reg. cat.
+
+### Sphere
+
+* VIXORSM - OR right sphere, average
+* VIXOLSM - OR left sphere, average
+
+```{r surveyglm 4cat sphere, error=TRUE}
+
+model.od <- svyglm(formula = VIXORSM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXOLSM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+```
+
+
+### Cylinder
+
+* VIXORCM - OR right cylinder, average
+* VIXOLCM - OR left cylinder, average
+
+```{r surveyglm 4cat cyl, error=TRUE}
+model.od <- svyglm(formula = VIXORCM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXOLCM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+```
+
+
+### SE
+
+```{r surveyglm 4cat SE, error=TRUE}
+model.od <- svyglm(formula = SER ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = SEL ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+### VA
+
+* VIDRVA - Right visual acuity, presenting
+* VIDLVA - Left visual acuity, presenting 
+
+```{r surveyglm 4cat va, error=TRUE}
+model.od <- svyglm(formula = VIDRVA ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIDLVA ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### glasses
+
+```{r surveyglm 4cat glasses, error=TRUE}
+model.od <- svyglm(formula = VIQ220 ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design, 
+               family = quasibinomial(	(link = "logit")))
+
+summary(model.od)
+
+ExtractSurveyRegression(model.od, "cat")
+
+rm(model.od)
+
+```
+
+
+### kera power
+
+* VIXKRDM - Right keratometry power, average (D) 
+* VIXKLDM - Left keratometry power, average (D) 
+
+```{r surveyglm 4cat kera power, error=TRUE}
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+
+summary(svyglm(formula = VIXKRDM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1 + sex*ECD070.gram.cat.4 + RIDRETH1*ECD070.gram.cat.4, design = nhanes.tsl.design))
+
+summary(svyglm(formula = VIXKLDM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1+ sex*ECD070.gram.cat.4 + RIDRETH1*ECD070.gram.cat.4, design = nhanes.tsl.design))
+
+# summary(glm(formula = VIXKRDM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, data = nhanesdat, weights = MEC10YR))
+```
+
+
+Kera Cyl
+
+* VIXKRCD 
+* VIXKLCD 
+
+```{r surveyglm 4cat kera cyl, error=TRUE}
+# summary(svyglm(formula = VIXORCM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design))
+# 
+# summary(svyglm(formula = VIXOLCM ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design))
+
+```
+
+
+
+
+### J0 ref
+
+```{r surveyglm 4cat ref j0, error=TRUE}
+model.od <- svyglm(formula = J0.ref.OD ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.ref.OS ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### J45 ref
+
+```{r surveyglm 4cat ref j45, error=TRUE}
+model.od <- svyglm(formula = J45.ref.OD ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.ref.OS ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+### J0 kera
+
+```{r surveyglm 4cat kera j0, error=TRUE}
+model.od <- svyglm(formula = J0.kera.OD ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J0.kera.OS ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+### J45 kera
+
+```{r surveyglm 4cat kera j45, error=TRUE}
+model.od <- svyglm(formula = J45.kera.OD ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+model.os <- svyglm(formula = J45.kera.OS ~ ECD070.gram.cat.4 + sex + age + year + RIDRETH1, design = nhanes.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+ExtractSurveyRegression(model.od, "cat")
+ExtractSurveyRegression(model.os, "cat")
+
+rm(model.od, model.os)
+
+```
+
+
+
+
