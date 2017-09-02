@@ -826,6 +826,18 @@ nhanes.tsl.design <-
 		data = nhanesdat
 	)
 
+# sensitivity analysis: restricted to normal birth weight
+nhanesdat.norm <- subset(nhanesdat, ECD070.gram.cat.3 == "normal")
+
+nhanes.norm.tsl.design <- 
+	svydesign(
+		id = ~SDMVPSU , 
+		strata = ~SDMVSTRA ,
+		nest = TRUE ,
+		weights = ~MEC10YR ,
+		data = nhanesdat.norm
+	)
+
 ```
 
 
@@ -1266,12 +1278,18 @@ ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
   geom_boxplot()
 
 plot.VIXKLDM <- ggplot(nhanesdat, aes(x = ECD070.gram, y = VIXKLDM)) +
-  geom_point(shape = 1, alpha = 1/4) +
+  geom_point(size=1) +
   geom_smooth(method = lm) +
   geom_vline(linetype="dotted", size=1, colour="red", xintercept = 2500) +
-  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100)
+  geom_vline(linetype="dotted", size=1, colour="red", xintercept = 4100) +
+    labs(x="") + 
+  labs(y="") +
+  theme(axis.text.x = element_text(size=26),
+          axis.text.y = element_text(size=26))
 
 plot.VIXKLDM
+ggsave("rm_plot.eps", dpi=300, width = 37, height = 20, units = "cm")
+
 plot.VIXKLDM + facet_grid(. ~ year)
 
 fig2 <- ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
@@ -1282,8 +1300,36 @@ fig2 <- ggplot(nhanesdat, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
 fig2 
 ggsave("fig2.tiff", dpi=300) # figure 2 for publication
 
+```
+
+### Sensitivity analysis: Kera power restricted to normal bw
+
+```{r plot bw kera power sensi, error=TRUE}
+
+
+plot.VIXKRDM <- ggplot(nhanesdat.norm, aes(x = ECD070.gram, y = VIXKRDM)) +
+  geom_point(shape = 1, alpha = 1/4) +
+  geom_smooth(method = lm) +
+  labs(x="Birth weight [grams]") + labs(y="Corneal power [diopters]")
+
+plot.VIXKRDM + facet_grid(. ~ year)
+
+
+ggplot(nhanesdat.norm, aes(x = ECD070.gram.cat.3, y = VIXKRDM)) +
+  geom_boxplot()
+
+plot.VIXKLDM <- ggplot(nhanesdat.norm, aes(x = ECD070.gram, y = VIXKLDM)) +
+  geom_point(size=1) +
+  geom_smooth(method = lm) +
+    labs(x="") + 
+  labs(y="")
+
+plot.VIXKLDM
+plot.VIXKLDM + facet_grid(. ~ year)
 
 ```
+
+
 
 ### Kera cylinder
 
@@ -1807,8 +1853,28 @@ summary(glm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, d
 
 ```
 
+### sensitivity analysis, restricted to normal birth weight
+
+```{r surveyglm cont kera power sensi norm, error=TRUE}
+
+crude.model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.100, design = nhanes.norm.tsl.design)
+crude.model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.100, design = nhanes.norm.tsl.design)
+
+summary(crude.model.od)
+summary(crude.model.os)
+
+rm(crude.model.od, crude.model.os)
 
 
+model.od <- svyglm(formula = VIXKRDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.norm.tsl.design)
+
+model.os <- svyglm(formula = VIXKLDM ~ ECD070.gram.100 + sex + age + year + RIDRETH1, design = nhanes.norm.tsl.design)
+
+summary(model.od)
+summary(model.os)
+
+
+```
 
 ### Kera Cyl
 
